@@ -1,69 +1,74 @@
-use crossterm::terminal::{Clear, ClearType};
-use crossterm::Command;
-use crossterm::{
-    cursor,
-    style::{self, Color, Stylize},
-    terminal, ExecutableCommand, QueueableCommand,
-};
-use std::io::{self, StdoutLock, Write};
+use anyhow::{self, Context};
+use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
+use crossterm::{cursor, execute, queue, QueueableCommand};
+use std::io::{self, Write};
+use std::thread;
+use std::time::Duration;
 
-const X_SYMBOLS: &'static str = "-------";
-const Y_SYMBOL: &'static str = "|";
+use crossterm::event::{poll, read, Event, KeyCode};
 
-struct DrawableEmoji<'a> {
-    content: &'a str,
-    x: i32,
-    y: i32,
-}
+const USER_PROFILE: &str = "▶";
 
-trait Draw {
-    fn draw(emoji: DrawableEmoji, stdout: &mut StdoutLock, color: Color);
-}
-
-impl Draw for DrawableEmoji<'_> {
-    fn draw<'a>(emoji: DrawableEmoji<'a>, stdout: &mut StdoutLock, color: Color) {
-        let arr = emoji.content.split("\n").collect::<Vec<_>>();
-
-        for n in 0..arr.len() {
-            todo!("NOT IMPLEMENTED YET");
-        }
-    }
-}
-
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
     let mut stdout = io::stdout();
-    stdout.execute(terminal::Clear(ClearType::All))?;
 
-    for y in 0..40 {
-        for x in 0..150 {
-            if x == 0 || x == 150 - 1 {
-                stdout
-                    .queue(cursor::MoveTo(x, y))?
-                    .queue(style::PrintStyledContent("|".white()))?;
-            } else if y == 0 || y == 40 - 1 {
-                stdout
-                    .queue(cursor::MoveTo(x, y))?
-                    .queue(style::PrintStyledContent("-".white()))?;
-            }
+    enable_raw_mode()?;
+    queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
+    let (mut w, mut h) = terminal::size().context("could not get size of terminal")?;
 
-            //note: middle of the screen;
+    let mut dash = "━".repeat(w as usize);
+    let mut prompt = String::new();
 
-            if y == 20 && x == 75 {
-                stdout
-                    .queue(cursor::MoveTo(x, y))?
-                    .queue(style::PrintStyledContent(X_SYMBOLS.white()))?
-                    .queue(cursor::MoveTo(x, y - 1))?
-                    .queue(style::PrintStyledContent(Y_SYMBOL.white()))?
-                    .queue(cursor::MoveTo(x, y - 2))?
-                    .queue(style::PrintStyledContent(Y_SYMBOL.white()))?
-                    .queue(cursor::MoveTo(x, y - 3))?
-                    .queue(style::PrintStyledContent(Y_SYMBOL.white()))?
-                    .queue(cursor::MoveTo(x, y - 3))?
-                    .queue(style::PrintStyledContent(Y_SYMBOL.white()))?;
-            }
+    let mut chats = Vec::new();
+
+    'task_looper: loop {
+        while poll(Duration::ZERO)? {
+            match read()? {
+                Event::Resize(width, height) => {
+                    w = width;
+                    h = height;
+                    dash = "━".repeat(w as usize);
+                }
+                Event::Key(event) => match event.code {
+                    KeyCode::Esc => {
+                        println!("{:?}", event.code);
+                        break 'task_looper;
+                    }
+                    KeyCode::Backspace => {
+                        prompt.pop();
+                    }
+                    KeyCode::Enter => {
+                        chats.push(prompt.clone());
+                        prompt.clear();
+                    }
+                    KeyCode::Char(x) => {
+                        prompt.push(x);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            };
         }
+
+        queue!(stdout, terminal::Clear(terminal::ClearType::All))?;
+        let mut y = 0;
+        for chat in chats.iter() {
+            queue!(stdout, cursor::MoveTo(0, y))?;
+            stdout.write(format!("{}    {}", USER_PROFILE, chat).as_bytes())?;
+            y += 2;
+        }
+
+        queue!(stdout, cursor::MoveTo(0, h - 2))?;
+        stdout.write(dash.as_bytes())?;
+
+        queue!(stdout, cursor::MoveTo(0, h - 1))?;
+        stdout.write(prompt.as_bytes())?;
+
+        stdout.flush().context("could not flush to screen")?;
+        thread::sleep(Duration::from_millis(33));
     }
 
-    stdout.flush()?;
+    disable_raw_mode()?;
+
     Ok(())
 }
